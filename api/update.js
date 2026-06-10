@@ -57,14 +57,27 @@ async function setMetafield(token, variantId, fileGid) {
   if (errs?.length) throw new Error(JSON.stringify(errs));
 }
 
+const stopFlags = new Map();
+
 export default async function handler(req, res) {
+  if (req.method === 'DELETE') {
+    const { id } = req.query;
+    if (id) stopFlags.set(id, true);
+    return res.status(200).json({ stopped: true });
+  }
+
   if (req.method !== 'POST') return res.status(405).end();
+
+  const runId = Date.now().toString();
+  stopFlags.set(runId, false);
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
   const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  send({ type: 'runId', id: runId });
 
   try {
     send({ type: 'info', msg: 'Getting access token...' });
@@ -78,8 +91,11 @@ export default async function handler(req, res) {
     let ok = 0, skipped = 0, errored = 0;
 
     for (const product of products) {
+      if (stopFlags.get(runId)) { send({ type: 'stopped', ok, skipped, errored }); res.end(); return; }
       send({ type: 'product', msg: product.title });
       for (const { node: variant } of product.variants.edges) {
+        if (stopFlags.get(runId)) { send({ type: 'stopped', ok, skipped, errored }); res.end(); return; }
+
         const colorOpt = variant.selectedOptions.find(o => o.name.toLowerCase() === 'color');
         if (!colorOpt) { skipped++; continue; }
 
@@ -113,5 +129,6 @@ export default async function handler(req, res) {
     send({ type: 'fatal', msg: e.message });
   }
 
+  stopFlags.delete(runId);
   res.end();
 }
