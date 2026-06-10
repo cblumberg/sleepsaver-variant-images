@@ -10,9 +10,13 @@
   .card { background: #fff; border-radius: 12px; border: 1px solid #e5e5e5; padding: 2rem; width: 100%; max-width: 480px; }
   h1 { font-size: 18px; font-weight: 600; color: #222; margin-bottom: 4px; }
   .subtitle { font-size: 14px; color: #888; margin-bottom: 1.5rem; }
-  button { width: 100%; padding: 10px; background: #233668; color: #fff; border: none; border-radius: 8px; font-size: 15px; font-weight: 500; cursor: pointer; }
-  button:hover { background: #1a2850; }
-  button:disabled { background: #aaa; cursor: not-allowed; }
+  .buttons { display: flex; gap: 8px; }
+  button { flex: 1; padding: 10px; border: none; border-radius: 8px; font-size: 15px; font-weight: 500; cursor: pointer; }
+  #runBtn { background: #233668; color: #fff; }
+  #runBtn:hover { background: #1a2850; }
+  #runBtn:disabled { background: #aaa; cursor: not-allowed; }
+  #stopBtn { background: #f0f0f0; color: #c63833; border: 1px solid #f0bfb0; display: none; }
+  #stopBtn:hover { background: #fce8e6; }
   #log { margin-top: 1.5rem; background: #f6f6f4; border-radius: 8px; padding: 1rem; font-family: monospace; font-size: 12px; max-height: 320px; overflow-y: auto; display: none; }
   .log-ok { color: #1a7a4a; }
   .log-skip { color: #888; }
@@ -22,18 +26,24 @@
   #summary { margin-top: 1rem; font-size: 14px; display: none; padding: 10px 12px; background: #f0f4ff; border-radius: 8px; }
   .sum-ok { color: #1a7a4a; font-weight: 600; }
   .sum-err { color: #c63833; font-weight: 600; }
+  .sum-stopped { color: #b07800; font-weight: 600; }
 </style>
 </head>
 <body>
 <div class="card">
   <h1>Swatch Image Updater</h1>
   <p class="subtitle">Updates swatch images for all products in Semi-Custom Beds</p>
-  <button id="runBtn" onclick="run()">Run Update</button>
+  <div class="buttons">
+    <button id="runBtn" onclick="run()">Run Update</button>
+    <button id="stopBtn" onclick="stop()">Stop</button>
+  </div>
   <div id="log"></div>
   <div id="summary"></div>
 </div>
 
 <script>
+let currentRunId = null;
+
 function log(msg, type) {
   const el = document.getElementById('log');
   el.style.display = 'block';
@@ -45,13 +55,37 @@ function log(msg, type) {
   el.scrollTop = el.scrollHeight;
 }
 
+function setRunning(running) {
+  document.getElementById('runBtn').disabled = running;
+  document.getElementById('runBtn').textContent = running ? 'Running...' : 'Run Update';
+  document.getElementById('stopBtn').style.display = running ? 'block' : 'none';
+}
+
+async function stop() {
+  if (!currentRunId) return;
+  document.getElementById('stopBtn').textContent = 'Stopping...';
+  document.getElementById('stopBtn').disabled = true;
+  await fetch(`/api/update?id=${currentRunId}`, { method: 'DELETE' });
+}
+
+function showSummary(event) {
+  const s = document.getElementById('summary');
+  s.style.display = 'block';
+  if (event.type === 'stopped') {
+    s.innerHTML = `<span class="sum-stopped">⚠ Stopped early</span> &nbsp; <span class="sum-ok">✓ ${event.ok} updated</span> &nbsp; ${event.skipped} skipped &nbsp; <span class="${event.errored ? 'sum-err' : ''}">${event.errored} errors</span>`;
+  } else {
+    s.innerHTML = `<span class="sum-ok">✓ ${event.ok} updated</span> &nbsp; ${event.skipped} skipped &nbsp; <span class="${event.errored ? 'sum-err' : ''}">${event.errored} errors</span>`;
+  }
+}
+
 async function run() {
-  const btn = document.getElementById('runBtn');
-  btn.disabled = true;
-  btn.textContent = 'Running...';
+  setRunning(true);
+  currentRunId = null;
   document.getElementById('log').innerHTML = '';
   document.getElementById('log').style.display = 'block';
   document.getElementById('summary').style.display = 'none';
+  document.getElementById('stopBtn').textContent = 'Stop';
+  document.getElementById('stopBtn').disabled = false;
 
   try {
     const res = await fetch('/api/update', { method: 'POST' });
@@ -68,10 +102,10 @@ async function run() {
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         const event = JSON.parse(line.slice(6));
-        if (event.type === 'done') {
-          const s = document.getElementById('summary');
-          s.style.display = 'block';
-          s.innerHTML = `<span class="sum-ok">✓ ${event.ok} updated</span> &nbsp; ${event.skipped} skipped &nbsp; <span class="${event.errored ? 'sum-err' : ''}">${event.errored} errors</span>`;
+        if (event.type === 'runId') {
+          currentRunId = event.id;
+        } else if (event.type === 'done' || event.type === 'stopped') {
+          showSummary(event);
         } else {
           log(event.msg, event.type);
         }
@@ -81,8 +115,8 @@ async function run() {
     log('Connection error: ' + e.message, 'error');
   }
 
-  btn.disabled = false;
-  btn.textContent = 'Run Update';
+  setRunning(false);
+  currentRunId = null;
 }
 </script>
 </body>
