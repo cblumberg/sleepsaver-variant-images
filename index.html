@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SleepSaver Swatch Updater</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; background: #f6f6f4; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem; }
+  .card { background: #fff; border-radius: 12px; border: 1px solid #e5e5e5; padding: 2rem; width: 100%; max-width: 480px; }
+  h1 { font-size: 18px; font-weight: 600; color: #222; margin-bottom: 4px; }
+  .subtitle { font-size: 14px; color: #888; margin-bottom: 1.5rem; }
+  button { width: 100%; padding: 10px; background: #233668; color: #fff; border: none; border-radius: 8px; font-size: 15px; font-weight: 500; cursor: pointer; }
+  button:hover { background: #1a2850; }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+  #log { margin-top: 1.5rem; background: #f6f6f4; border-radius: 8px; padding: 1rem; font-family: monospace; font-size: 12px; max-height: 320px; overflow-y: auto; display: none; }
+  .log-ok { color: #1a7a4a; }
+  .log-skip { color: #888; }
+  .log-error { color: #c63833; }
+  .log-info { color: #233668; font-weight: 600; }
+  .log-product { color: #444; font-weight: 600; margin-top: 4px; }
+  #summary { margin-top: 1rem; font-size: 14px; display: none; padding: 10px 12px; background: #f0f4ff; border-radius: 8px; }
+  .sum-ok { color: #1a7a4a; font-weight: 600; }
+  .sum-err { color: #c63833; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Swatch Image Updater</h1>
+  <p class="subtitle">Updates swatch images for all products in Semi-Custom Beds</p>
+  <button id="runBtn" onclick="run()">Run Update</button>
+  <div id="log"></div>
+  <div id="summary"></div>
+</div>
+
+<script>
+function log(msg, type) {
+  const el = document.getElementById('log');
+  el.style.display = 'block';
+  const line = document.createElement('div');
+  line.className = 'log-' + type;
+  const prefixes = { ok: '✓ ', skip: '– ', error: '✗ ', info: '', product: '▸ ', fatal: '✗ ' };
+  line.textContent = (prefixes[type] || '') + msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+async function run() {
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('log').style.display = 'block';
+  document.getElementById('summary').style.display = 'none';
+
+  try {
+    const res = await fetch('/api/update', { method: 'POST' });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const event = JSON.parse(line.slice(6));
+        if (event.type === 'done') {
+          const s = document.getElementById('summary');
+          s.style.display = 'block';
+          s.innerHTML = `<span class="sum-ok">✓ ${event.ok} updated</span> &nbsp; ${event.skipped} skipped &nbsp; <span class="${event.errored ? 'sum-err' : ''}">${event.errored} errors</span>`;
+        } else {
+          log(event.msg, event.type);
+        }
+      }
+    }
+  } catch (e) {
+    log('Connection error: ' + e.message, 'error');
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Run Update';
+}
+</script>
+</body>
+</html>
