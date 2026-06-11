@@ -1,5 +1,4 @@
 const SHOP = 'sleep-saver-nj';
-const COLLECTION = 'semi-custom-beds';
 
 async function getToken() {
   const res = await fetch(`https://${SHOP}.myshopify.com/admin/oauth/access_token`, {
@@ -48,24 +47,6 @@ async function getVariants(token, productId) {
   return variants;
 }
 
-async function getProducts(token) {
-  const products = [];
-  let cursor = null, hasNext = true;
-  while (hasNext) {
-    const data = await gql(token,
-      `query($h:String!,$c:String){collectionByHandle(handle:$h){products(first:50,after:$c){pageInfo{hasNextPage}edges{cursor node{id title}}}}}`,
-      { h: COLLECTION, c: cursor });
-    const edges = data?.collectionByHandle?.products?.edges ?? [];
-    edges.forEach(e => products.push(e.node));
-    hasNext = data.collectionByHandle.products.pageInfo.hasNextPage;
-    cursor = edges[edges.length - 1]?.cursor ?? null;
-  }
-  for (const product of products) {
-    product.variants = { edges: (await getVariants(token, product.id)).map(v => ({ node: v })) };
-  }
-  return products;
-}
-
 async function setMetafield(token, variantId, fileGid) {
   const data = await gql(token,
     `mutation($m:[MetafieldsSetInput!]!){metafieldsSet(metafields:$m){userErrors{field message}}}`,
@@ -75,78 +56,49 @@ async function setMetafield(token, variantId, fileGid) {
   if (errs?.length) throw new Error(JSON.stringify(errs));
 }
 
-const stopFlags = new Map();
-
 export default async function handler(req, res) {
-  if (req.method === 'DELETE') {
-    const { id } = req.query;
-    if (id) stopFlags.set(id, true);
-    return res.status(200).json({ stopped: true });
-  }
-
   if (req.method !== 'POST') return res.status(405).end();
 
-  const runId = Date.now().toString();
-  stopFlags.set(runId, false);
-
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-
-  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
-
-  send({ type: 'runId', id: runId });
+  const { productId, productTitle, fileCache } = req.body;
+  if (!productId) return res.status(400).json({ error: 'Missing productId' });
 
   try {
-    send({ type: 'info', msg: 'Getting access token...' });
     const token = await getToken();
-
-    send({ type: 'info', msg: 'Fetching products...' });
-    const products = await getProducts(token);
-    send({ type: 'info', msg: `Found ${products.length} products` });
-
-    const cache = {};
+    const variants = await getVariants(token, productId);
+    const cache = { ...fileCache };
     let ok = 0, skipped = 0, errored = 0;
+    const log = [];
 
-    for (const product of products) {
-      if (stopFlags.get(runId)) { send({ type: 'stopped', ok, skipped, errored }); res.end(); return; }
-      send({ type: 'product', msg: product.title });
-      for (const { node: variant } of product.variants.edges) {
-        if (stopFlags.get(runId)) { send({ type: 'stopped', ok, skipped, errored }); res.end(); return; }
+    for (const variant of variants) {
+      const colorOpt = variant.selectedOptions.find(o => o.name.toLowerCase() === 'color');
+      if (!colorOpt) { skipped++; continue; }
 
-        const colorOpt = variant.selectedOptions.find(o => o.name.toLowerCase() === 'color');
-        if (!colorOpt) { skipped++; continue; }
-
-        const filename = colorOpt.value.toLowerCase() + '.webp';
-        if (!(filename in cache)) {
-          cache[filename] = await getFileGid(token, filename);
-        }
-        const gid = cache[filename];
-
-        if (!gid) {
-          send({ type: 'skip', msg: `${colorOpt.value} — file not found` });
-          skipped++;
-          continue;
-        }
-
-        try {
-          await setMetafield(token, variant.id, gid);
-          send({ type: 'ok', msg: colorOpt.value });
-          ok++;
-        } catch (e) {
-          send({ type: 'error', msg: `${colorOpt.value}: ${e.message}` });
-          errored++;
-        }
-
-        await new Promise(r => setTimeout(r, 150));
+      const filename = colorOpt.value.toLowerCase() + '.webp';
+      if (!(filename in cache)) {
+        cache[filename] = await getFileGid(token, filename);
       }
+      const gid = cache[filename];
+
+      if (!gid) {
+        log.push({ type: 'skip', msg: `${colorOpt.value} — file not found` });
+        skipped++;
+        continue;
+      }
+
+      try {
+        await setMetafield(token, variant.id, gid);
+        log.push({ type: 'ok', msg: colorOpt.value });
+        ok++;
+      } catch (e) {
+        log.push({ type: 'error', msg: `${colorOpt.value}: ${e.message}` });
+        errored++;
+      }
+
+      await new Promise(r => setTimeout(r, 150));
     }
 
-    send({ type: 'done', ok, skipped, errored });
+    res.status(200).json({ ok, skipped, errored, log, cache });
   } catch (e) {
-    send({ type: 'fatal', msg: e.message });
+    res.status(500).json({ error: e.message });
   }
-
-  stopFlags.delete(runId);
-  res.end();
 }
