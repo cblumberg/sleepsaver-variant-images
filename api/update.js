@@ -115,3 +115,38 @@ export default async function handler(req, res) {
         if (stopFlags.get(runId)) { send({ type: 'stopped', ok, skipped, errored }); res.end(); return; }
 
         const colorOpt = variant.selectedOptions.find(o => o.name.toLowerCase() === 'color');
+        if (!colorOpt) { skipped++; continue; }
+
+        const filename = colorOpt.value.toLowerCase() + '.webp';
+        if (!(filename in cache)) {
+          cache[filename] = await getFileGid(token, filename);
+        }
+        const gid = cache[filename];
+
+        if (!gid) {
+          send({ type: 'skip', msg: `${colorOpt.value} — file not found` });
+          skipped++;
+          continue;
+        }
+
+        try {
+          await setMetafield(token, variant.id, gid);
+          send({ type: 'ok', msg: colorOpt.value });
+          ok++;
+        } catch (e) {
+          send({ type: 'error', msg: `${colorOpt.value}: ${e.message}` });
+          errored++;
+        }
+
+        await new Promise(r => setTimeout(r, 150));
+      }
+    }
+
+    send({ type: 'done', ok, skipped, errored });
+  } catch (e) {
+    send({ type: 'fatal', msg: e.message });
+  }
+
+  stopFlags.delete(runId);
+  res.end();
+}
