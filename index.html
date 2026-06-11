@@ -7,22 +7,36 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; background: #f6f6f4; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem; }
-  .card { background: #fff; border-radius: 12px; border: 1px solid #e5e5e5; padding: 2rem; width: 100%; max-width: 480px; }
+  .card { background: #fff; border-radius: 12px; border: 1px solid #e5e5e5; padding: 2rem; width: 100%; max-width: 520px; }
   h1 { font-size: 18px; font-weight: 600; color: #222; margin-bottom: 4px; }
   .subtitle { font-size: 14px; color: #888; margin-bottom: 1.5rem; }
-  .buttons { display: flex; gap: 8px; }
-  button { flex: 1; padding: 10px; border: none; border-radius: 8px; font-size: 15px; font-weight: 500; cursor: pointer; }
+  .buttons { display: flex; gap: 8px; margin-bottom: 1rem; }
+  button { flex: 1; padding: 10px; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; }
   #runBtn { background: #233668; color: #fff; }
-  #runBtn:hover { background: #1a2850; }
+  #runBtn:hover:not(:disabled) { background: #1a2850; }
   #runBtn:disabled { background: #aaa; cursor: not-allowed; }
-  #stopBtn { background: #f0f0f0; color: #c63833; border: 1px solid #f0bfb0; display: none; }
+  #stopBtn { background: #f0f0f0; color: #c63833; border: 1px solid #f0bfb0; display: none; flex: 0 0 auto; width: 80px; }
   #stopBtn:hover { background: #fce8e6; }
-  #log { margin-top: 1.5rem; background: #f6f6f4; border-radius: 8px; padding: 1rem; font-family: monospace; font-size: 12px; max-height: 320px; overflow-y: auto; display: none; }
+
+  .log-wrap { position: relative; margin-top: 1rem; }
+  #log { background: #f6f6f4; border-radius: 8px; padding: 1rem 1rem 2.5rem; font-family: monospace; font-size: 12px; max-height: 260px; overflow-y: auto; display: none; }
+  #copyBtn { position: absolute; bottom: 8px; right: 8px; background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 3px 10px; font-size: 11px; cursor: pointer; color: #555; display: none; }
+  #copyBtn:hover { background: #f0f0f0; }
+
   .log-ok { color: #1a7a4a; }
-  .log-skip { color: #888; }
+  .log-skip { color: #aaa; }
   .log-error { color: #c63833; }
   .log-info { color: #233668; font-weight: 600; }
-  .log-product { color: #444; font-weight: 600; margin-top: 4px; }
+  .log-product { color: #333; font-weight: 600; margin-top: 6px; }
+
+  #productLog { margin-top: 1rem; display: none; }
+  #productLog h2 { font-size: 13px; font-weight: 600; color: #555; margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
+  .product-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; padding: 5px 0; border-bottom: 1px solid #f0f0f0; }
+  .product-row:last-child { border-bottom: none; }
+  .product-name { color: #222; }
+  .product-count { color: #1a7a4a; font-weight: 600; font-size: 12px; }
+  .product-error { color: #c63833; font-size: 12px; }
+
   #summary { margin-top: 1rem; font-size: 14px; display: none; padding: 10px 12px; background: #f0f4ff; border-radius: 8px; }
   .sum-ok { color: #1a7a4a; font-weight: 600; }
   .sum-err { color: #c63833; font-weight: 600; }
@@ -35,24 +49,53 @@
   <p class="subtitle">Updates swatch images for all products in Semi-Custom Beds</p>
   <div class="buttons">
     <button id="runBtn" onclick="run()">Run Update</button>
-    <button id="stopBtn" onclick="stop()">Stop</button>
+    <button id="stopBtn" onclick="stopRun()">Stop</button>
   </div>
-  <div id="log"></div>
+
+  <div class="log-wrap">
+    <div id="log"></div>
+    <button id="copyBtn" onclick="copyLog()">Copy log</button>
+  </div>
+
+  <div id="productLog">
+    <h2>Products updated</h2>
+    <div id="productRows"></div>
+  </div>
+
   <div id="summary"></div>
 </div>
 
 <script>
-let currentRunId = null;
+let stopping = false;
 
 function log(msg, type) {
   const el = document.getElementById('log');
   el.style.display = 'block';
+  document.getElementById('copyBtn').style.display = 'block';
   const line = document.createElement('div');
   line.className = 'log-' + type;
-  const prefixes = { ok: '✓ ', skip: '– ', error: '✗ ', info: '', product: '▸ ', fatal: '✗ ' };
-  line.textContent = (prefixes[type] || '') + msg;
+  const prefixes = { ok: '✓ ', skip: '– ', error: '✗ ', info: '', product: '▸ ' };
+  line.textContent = (prefixes[type] ?? '') + msg;
   el.appendChild(line);
   el.scrollTop = el.scrollHeight;
+}
+
+function addProductRow(title, ok, errored) {
+  const wrap = document.getElementById('productLog');
+  wrap.style.display = 'block';
+  const row = document.createElement('div');
+  row.className = 'product-row';
+  row.innerHTML = `<span class="product-name">${title}</span><span class="${errored ? 'product-error' : 'product-count'}">${ok} updated${errored ? `, ${errored} errors` : ''}</span>`;
+  document.getElementById('productRows').appendChild(row);
+}
+
+function copyLog() {
+  const lines = [...document.getElementById('log').querySelectorAll('div')].map(d => d.textContent).join('\n');
+  navigator.clipboard.writeText(lines).then(() => {
+    const btn = document.getElementById('copyBtn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy log', 2000);
+  });
 }
 
 function setRunning(running) {
@@ -61,62 +104,79 @@ function setRunning(running) {
   document.getElementById('stopBtn').style.display = running ? 'block' : 'none';
 }
 
-async function stop() {
-  if (!currentRunId) return;
+function stopRun() {
+  stopping = true;
   document.getElementById('stopBtn').textContent = 'Stopping...';
   document.getElementById('stopBtn').disabled = true;
-  await fetch(`/api/update?id=${currentRunId}`, { method: 'DELETE' });
-}
-
-function showSummary(event) {
-  const s = document.getElementById('summary');
-  s.style.display = 'block';
-  if (event.type === 'stopped') {
-    s.innerHTML = `<span class="sum-stopped">⚠ Stopped early</span> &nbsp; <span class="sum-ok">✓ ${event.ok} updated</span> &nbsp; ${event.skipped} skipped &nbsp; <span class="${event.errored ? 'sum-err' : ''}">${event.errored} errors</span>`;
-  } else {
-    s.innerHTML = `<span class="sum-ok">✓ ${event.ok} updated</span> &nbsp; ${event.skipped} skipped &nbsp; <span class="${event.errored ? 'sum-err' : ''}">${event.errored} errors</span>`;
-  }
 }
 
 async function run() {
+  stopping = false;
   setRunning(true);
-  currentRunId = null;
   document.getElementById('log').innerHTML = '';
   document.getElementById('log').style.display = 'block';
+  document.getElementById('copyBtn').style.display = 'none';
+  document.getElementById('productLog').style.display = 'none';
+  document.getElementById('productRows').innerHTML = '';
   document.getElementById('summary').style.display = 'none';
   document.getElementById('stopBtn').textContent = 'Stop';
   document.getElementById('stopBtn').disabled = false;
 
-  try {
-    const res = await fetch('/api/update', { method: 'POST' });
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
+  let totalOk = 0, totalSkipped = 0, totalErrored = 0;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const event = JSON.parse(line.slice(6));
-        if (event.type === 'runId') {
-          currentRunId = event.id;
-        } else if (event.type === 'done' || event.type === 'stopped') {
-          showSummary(event);
-        } else {
-          log(event.msg, event.type);
-        }
+  try {
+    log('Fetching product list...', 'info');
+    const res = await fetch('/api/products');
+    const { products, error } = await res.json();
+    if (error) throw new Error(error);
+    log(`Found ${products.length} products`, 'info');
+
+    let fileCache = {};
+
+    for (const product of products) {
+      if (stopping) break;
+
+      log(product.title, 'product');
+
+      const r = await fetch('/api/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: product.id, productTitle: product.title, fileCache }),
+      });
+
+      const result = await r.json();
+
+      if (result.error) {
+        log(`Error: ${result.error}`, 'error');
+        totalErrored++;
+        continue;
       }
+
+      // merge file cache so subsequent products skip lookups
+      fileCache = { ...fileCache, ...result.cache };
+
+      for (const entry of result.log) {
+        log(entry.msg, entry.type);
+      }
+
+      addProductRow(product.title, result.ok, result.errored);
+      totalOk += result.ok;
+      totalSkipped += result.skipped;
+      totalErrored += result.errored;
     }
   } catch (e) {
-    log('Connection error: ' + e.message, 'error');
+    log('Fatal error: ' + e.message, 'error');
+  }
+
+  const s = document.getElementById('summary');
+  s.style.display = 'block';
+  if (stopping) {
+    s.innerHTML = `<span class="sum-stopped">⚠ Stopped early</span> &nbsp; <span class="sum-ok">✓ ${totalOk} updated</span> &nbsp; ${totalSkipped} skipped &nbsp; <span class="${totalErrored ? 'sum-err' : ''}">${totalErrored} errors</span>`;
+  } else {
+    s.innerHTML = `<span class="sum-ok">✓ ${totalOk} updated</span> &nbsp; ${totalSkipped} skipped &nbsp; <span class="${totalErrored ? 'sum-err' : ''}">${totalErrored} errors</span>`;
   }
 
   setRunning(false);
-  currentRunId = null;
 }
 </script>
 </body>
