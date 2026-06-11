@@ -33,17 +33,35 @@ async function getFileGid(token, filename) {
   return data?.files?.edges?.[0]?.node?.id ?? null;
 }
 
+async function getVariants(token, productId) {
+  const variants = [];
+  let cursor = null, hasNext = true;
+  while (hasNext) {
+    const data = await gql(token,
+      `query($id:ID!,$c:String){product(id:$id){variants(first:100,after:$c){pageInfo{hasNextPage}edges{cursor node{id selectedOptions{name value}}}}}}`,
+      { id: productId, c: cursor });
+    const edges = data?.product?.variants?.edges ?? [];
+    edges.forEach(e => variants.push(e.node));
+    hasNext = data.product.variants.pageInfo.hasNextPage;
+    cursor = edges[edges.length - 1]?.cursor ?? null;
+  }
+  return variants;
+}
+
 async function getProducts(token) {
   const products = [];
   let cursor = null, hasNext = true;
   while (hasNext) {
     const data = await gql(token,
-      `query($h:String!,$c:String){collectionByHandle(handle:$h){products(first:50,after:$c){pageInfo{hasNextPage}edges{cursor node{id title variants(first:100){edges{node{id selectedOptions{name value}}}}}}}}}`
-      , { h: COLLECTION, c: cursor });
+      `query($h:String!,$c:String){collectionByHandle(handle:$h){products(first:50,after:$c){pageInfo{hasNextPage}edges{cursor node{id title}}}}}`,
+      { h: COLLECTION, c: cursor });
     const edges = data?.collectionByHandle?.products?.edges ?? [];
     edges.forEach(e => products.push(e.node));
     hasNext = data.collectionByHandle.products.pageInfo.hasNextPage;
     cursor = edges[edges.length - 1]?.cursor ?? null;
+  }
+  for (const product of products) {
+    product.variants = { edges: (await getVariants(token, product.id)).map(v => ({ node: v })) };
   }
   return products;
 }
@@ -97,38 +115,3 @@ export default async function handler(req, res) {
         if (stopFlags.get(runId)) { send({ type: 'stopped', ok, skipped, errored }); res.end(); return; }
 
         const colorOpt = variant.selectedOptions.find(o => o.name.toLowerCase() === 'color');
-        if (!colorOpt) { skipped++; continue; }
-
-        const filename = colorOpt.value.toLowerCase() + '.webp';
-        if (!(filename in cache)) {
-          cache[filename] = await getFileGid(token, filename);
-        }
-        const gid = cache[filename];
-
-        if (!gid) {
-          send({ type: 'skip', msg: `${colorOpt.value} — file not found` });
-          skipped++;
-          continue;
-        }
-
-        try {
-          await setMetafield(token, variant.id, gid);
-          send({ type: 'ok', msg: colorOpt.value });
-          ok++;
-        } catch (e) {
-          send({ type: 'error', msg: `${colorOpt.value}: ${e.message}` });
-          errored++;
-        }
-
-        await new Promise(r => setTimeout(r, 150));
-      }
-    }
-
-    send({ type: 'done', ok, skipped, errored });
-  } catch (e) {
-    send({ type: 'fatal', msg: e.message });
-  }
-
-  stopFlags.delete(runId);
-  res.end();
-}
