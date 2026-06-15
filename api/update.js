@@ -27,19 +27,9 @@ async function gql(token, query, variables) {
   return data;
 }
 
-async function getFileGid(token, filename, log) {
-  const data = await gql(token,
-    `query($q:String!){files(first:10,query:$q){edges{node{id ... on MediaImage{image{url}} ... on GenericFile{url}}}}}`,
-    { q: `filename:${filename}` }
-  );
-  const edges = data?.files?.edges ?? [];
-  const candidates = edges.map(e => {
-    const url = e.node?.image?.url ?? e.node?.url ?? '';
-    return { id: e.node?.id, name: url.split('/').pop().split('?')[0] };
-  });
-  if (log) log.push({ type: 'debug', msg: `search "${filename}" -> [${candidates.map(c => c.name || '(no url)').join(', ')}]` });
-  const exact = candidates.find(c => c.name.toLowerCase() === filename.toLowerCase());
-  return exact?.id ?? null;
+async function getFileGid(token, filename) {
+  const data = await gql(token, `query($q:String!){files(first:1,query:$q){edges{node{id}}}}`, { q: `filename:${filename}` });
+  return data?.files?.edges?.[0]?.node?.id ?? null;
 }
 
 async function getVariants(token, productId) {
@@ -68,27 +58,33 @@ async function setMetafield(token, variantId, fileGid) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
+
   const { productId, productTitle, fileCache } = req.body;
   if (!productId) return res.status(400).json({ error: 'Missing productId' });
+
   try {
     const token = await getToken();
     const variants = await getVariants(token, productId);
     const cache = { ...fileCache };
     let ok = 0, skipped = 0, errored = 0;
     const log = [];
+
     for (const variant of variants) {
       const colorOpt = variant.selectedOptions.find(o => o.name.toLowerCase() === 'color');
       if (!colorOpt) { skipped++; continue; }
+
       const filename = colorOpt.value.toLowerCase() + '.webp';
       if (!(filename in cache)) {
-        cache[filename] = await getFileGid(token, filename, log);
+        cache[filename] = await getFileGid(token, filename);
       }
       const gid = cache[filename];
+
       if (!gid) {
         log.push({ type: 'skip', msg: `${colorOpt.value} — file not found` });
         skipped++;
         continue;
       }
+
       try {
         await setMetafield(token, variant.id, gid);
         log.push({ type: 'ok', msg: colorOpt.value });
@@ -97,8 +93,10 @@ export default async function handler(req, res) {
         log.push({ type: 'error', msg: `${colorOpt.value}: ${e.message}` });
         errored++;
       }
+
       await new Promise(r => setTimeout(r, 150));
     }
+
     res.status(200).json({ ok, skipped, errored, log, cache });
   } catch (e) {
     res.status(500).json({ error: e.message });
