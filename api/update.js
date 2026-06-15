@@ -27,18 +27,19 @@ async function gql(token, query, variables) {
   return data;
 }
 
-async function getFileGid(token, filename) {
+async function getFileGid(token, filename, log) {
   const data = await gql(token,
-    `query($q:String!){files(first:10,query:$q){edges{node{id ... on MediaImage{image{url}}}}}}`,
+    `query($q:String!){files(first:10,query:$q){edges{node{id ... on MediaImage{image{url}} ... on GenericFile{url}}}}}`,
     { q: `filename:${filename}` }
   );
   const edges = data?.files?.edges ?? [];
-  const exact = edges.find(e => {
-    const url = e.node?.image?.url ?? '';
-    const name = url.split('/').pop().split('?')[0];
-    return name.toLowerCase() === filename.toLowerCase();
+  const candidates = edges.map(e => {
+    const url = e.node?.image?.url ?? e.node?.url ?? '';
+    return { id: e.node?.id, name: url.split('/').pop().split('?')[0] };
   });
-  return exact?.node?.id ?? null;
+  if (log) log.push({ type: 'debug', msg: `search "${filename}" -> [${candidates.map(c => c.name || '(no url)').join(', ')}]` });
+  const exact = candidates.find(c => c.name.toLowerCase() === filename.toLowerCase());
+  return exact?.id ?? null;
 }
 
 async function getVariants(token, productId) {
@@ -80,7 +81,7 @@ export default async function handler(req, res) {
       if (!colorOpt) { skipped++; continue; }
       const filename = colorOpt.value.toLowerCase() + '.webp';
       if (!(filename in cache)) {
-        cache[filename] = await getFileGid(token, filename);
+        cache[filename] = await getFileGid(token, filename, log);
       }
       const gid = cache[filename];
       if (!gid) {
